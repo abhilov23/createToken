@@ -11,7 +11,7 @@ Create your own fungible tokens on the **Solana blockchain** with metadata — j
 ---
 
 ## 🚀 Preview
-
+- Deployed Program Id: 44v2qXt8mpWDvUvAeYD2e9GLWbqDbVZmy6xL8VA8LVgp
 ![Solana Token Creator UI](./image.png)
 
 ---
