@@ -7,6 +7,9 @@ import { useWallet, useConnection, useAnchorWallet } from "@solana/wallet-adapte
 import { useState } from "react";
 import {MPL_TOKEN_METADATA_PROGRAM_ID} from '@metaplex-foundation/mpl-token-metadata';
 import { WalletMultiButton, WalletDisconnectButton } from "@solana/wallet-adapter-react-ui";
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { BN } from '@coral-xyz/anchor';
+
 
 const METADATA_PROGRAM_ID = new PublicKey(MPL_TOKEN_METADATA_PROGRAM_ID);
 
@@ -24,6 +27,7 @@ export default function Home() {
     symbol: '',
     decimals: 9,
     uri: '',
+    initialSupply: 0,
   }); 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -32,7 +36,7 @@ export default function Home() {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
-      [name]: name === 'decimals' ? parseInt(value) || 0 : value
+      [name]: name === 'decimals' || name === 'initialSupply' ? parseInt(value) || 0 : value
     }));
   };
 
@@ -51,44 +55,77 @@ export default function Home() {
     setError('');
     
     try {
-      //for generating random address
-      const mintKeypair = Keypair.generate(); 
+      const provider = new AnchorProvider(connection, anchorWallet, {});
+      const program = new Program(idl, provider);
 
-      //finding metadata PDA
+      // UPDATED: Generate the mint PDA with token name included in seeds
+      const [mintAccount, mintBump] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("mint"), 
+          publicKey.toBuffer(),
+          Buffer.from(formData.name) // Add token name to match Rust program
+        ],
+        program.programId
+      );
+
+      console.log("Generated mint PDA:", mintAccount.toString());
+
+      // Check if this token name already exists for this wallet
+      const accountInfo = await connection.getAccountInfo(mintAccount);
+      if (accountInfo) {
+        setError(`You already have a token named "${formData.name}". Please choose a different name.`);
+        setIsLoading(false);
+        return;
+      }
+
+      // Find metadata PDA
       const [metadataAccount] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("metadata"),
           METADATA_PROGRAM_ID.toBuffer(),
-          mintKeypair.publicKey.toBuffer(),
+          mintAccount.toBuffer(),
         ],
         METADATA_PROGRAM_ID
       );
+
+      // Find associated token account
+      const associatedTokenAccount = getAssociatedTokenAddressSync(
+        mintAccount,
+        publicKey,
+        false,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID
+      );
        
       console.log("Sending transactions.....");
+      console.log("Mint account:", mintAccount.toString());
+      console.log("Metadata account:", metadataAccount.toString());
+      console.log("Associated token account:", associatedTokenAccount.toString());
 
-      const provider = new AnchorProvider(connection, anchorWallet, {});
-      const program = new Program(idl, provider);
-
-      // Fixed: Match the exact parameter order and account names from IDL
+      // Create token with all required parameters
       const tx = await program.methods
-        .createTokenMint(  // Method name should be camelCase
-          formData.decimals,  // _token_decimals (u8) - first parameter
-          formData.name,      // token_name (string) - second parameter  
-          formData.symbol,    // token_symbol (string) - third parameter
-          formData.uri        // token_uri (string) - fourth parameter
+        .createTokenMint(
+          formData.decimals,       
+          formData.name,          
+          formData.symbol,       
+          formData.uri || "",      
+          new BN(formData.initialSupply)   
         )
         .accounts({
-          payer: publicKey,                    // matches "payer" in IDL
-          metadataAccount: metadataAccount,    // matches "metadata_account" in IDL
-          mintAccount: mintKeypair.publicKey,  // matches "mint_account" in IDL
-          tokenMetadataProgram: METADATA_PROGRAM_ID, // matches "token_metadata_program" in IDL
-          // Note: tokenProgram, systemProgram, and rent are auto-resolved by Anchor
+          payer: publicKey,
+          metadataAccount: metadataAccount,
+          mintAccount: mintAccount,
+          associatedTokenAccount: associatedTokenAccount,
+          tokenMetadataProgram: METADATA_PROGRAM_ID,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: new PublicKey("11111111111111111111111111111111"),
+          rent: new PublicKey("SysvarRent111111111111111111111111111111111"),
         })
-        .signers([mintKeypair])
         .rpc();
          
       console.log("Token created successfully:", tx);
-      console.log("Mint address:", mintKeypair.publicKey.toString());
+      console.log("Mint address:", mintAccount.toString());
       
       // Clear form on success
       setFormData({
@@ -96,6 +133,7 @@ export default function Home() {
         symbol: '',
         decimals: 9,
         uri: '',
+        initialSupply: 0,
       });
 
     } catch(error) {
@@ -149,6 +187,16 @@ export default function Home() {
         value={formData.uri} 
         onChange={handleInputChange}
         placeholder="Metadata URI (optional)"
+        style={{ width: '100%', padding: '8px', marginBottom: '8px' }}
+        />
+
+        <input 
+        name="initialSupply"
+        type="number"
+        value={formData.initialSupply}
+        onChange={handleInputChange}
+        placeholder="Initial Supply (0 for no initial mint)"
+        min="0"
         style={{ width: '100%', padding: '8px', marginBottom: '8px' }}
         />
       </div>
